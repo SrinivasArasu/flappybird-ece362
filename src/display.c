@@ -66,6 +66,19 @@ void tft_set_addr_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
 
 void draw_rect(int x,int y,int w,int h,uint16_t color)
 {
+        if (x < 0) {
+        w += x;
+        x = 0;
+    }
+    if (y < 0) {
+        h += y;
+        y = 0;
+    }
+        if (x >= 320 || y >= 240) return;
+    if (x + w > 320) w = 320 - x;
+    if (y + h > 240) h = 240 - y;
+
+    if (w <= 0 || h <= 0) return;
     tft_set_addr_window(x,y,x+w-1,y+h-1);
 
     gpio_put(TFT_DC,1);
