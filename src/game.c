@@ -2,32 +2,35 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
-#define SCREEN_WIDTH 320
+
+#define SCREEN_WIDTH 320 //correctorder
 #define SCREEN_HEIGHT 240
 
 #define BIRD_SIZE 8
 #define PIPE_WIDTH 20
 #define PIPE_GAP 80
-#define PIPE_SPEED 5
+#define PIPE_SPEED 6
 
-#define GRAVITY 1
-#define JUMP_FORCE -8
+#define GRAVITY 1 //decimals wont work
 
 #define PIPE_COUNT 3
 
-#define COLOR_BG    0x0000
+#define COLOR_BG    0xBFDF //colors thoroughly vetted :)
 #define COLOR_BIRD  0xFFE0
-#define COLOR_PIPE  0x07E0
+#define COLOR_PIPE  0x07A0
 #define COLOR_RED   0xF800
 #define COLOR_WHITE 0xFFFF
 #define COLOR_BLACK 0x0000
 
-#define HUD_HEIGHT 28
+#define HUD_HEIGHT 28 //little red bar on top - atharva's idea
 
+int load_high_score(void);
+void save_high_score(int score);
+void set_bgm_playing(bool play);
 extern void tft_fill_screen(uint16_t color);
 extern void draw_rect(int x,int y,int w,int h,uint16_t color);
 
-typedef struct {
+typedef struct { //struct for game data makes it easier to keep track of things ece264++
     int x, y, velocity;
     int old_x, old_y;
 } Bird;
@@ -48,31 +51,23 @@ int gravity_delay = 25;
 int score = 0;
 int high_score = 0;
 
-int last_drawn_score = -1;
+int last_drawn_score = -1; //stops from 
 int last_drawn_high_score = -1;
 
-static void erase_bird(void);
-static void draw_bird(void);
-static void erase_pipes(void);
-static void draw_pipes(void);
-
-static void draw_digit(int x,int y,int d,int s,uint16_t c);
-static void draw_number(int x,int y,int v,int s,uint16_t c);
-static void draw_text(int x,int y,const char *t,int s,uint16_t c);
-
-static void draw_hud(void);
-static void draw_game_over_screen(void);
-
+// ---------------- INIT ----------------
 void game_init()
-{
+{   
+    //save_high_score(0); //to reset eeprom when demoing
     bird.x = 60;
     bird.y = 160;
     bird.velocity = 0;
     bird.old_x = bird.x;
     bird.old_y = bird.y;
 
-    gravity_delay = 25;
+    gravity_delay = 25; // to give users some time to jumpa nd doesnt autoimaticcally pull the bird down when game starts
     score = 0;
+    high_score = load_high_score();   // loads score
+    printf("Loaded HS: %d\n", high_score); //debug line
 
     last_drawn_score = -1;
     last_drawn_high_score = -1;
@@ -80,49 +75,62 @@ void game_init()
     for(int i=0;i<PIPE_COUNT;i++)
     {
         pipes[i].x = SCREEN_WIDTH + i*120;
-        pipes[i].gap_y = rand() % (SCREEN_HEIGHT - PIPE_GAP - HUD_HEIGHT - 20) + HUD_HEIGHT + 10;
+        //random gap position v
+        pipes[i].gap_y = rand() % (SCREEN_HEIGHT - PIPE_GAP - HUD_HEIGHT - 20) + HUD_HEIGHT + 10; //please dont touch i dont know how to fix
         pipes[i].old_x = pipes[i].x;
         pipes[i].old_gap_y = pipes[i].gap_y;
         pipes[i].scored = false;
     }
 
+    score = 0;
+    set_bgm_playing(true); //background music
+
     game_over = false;
+    
     game_over_screen_drawn = false;
 
-    tft_fill_screen(COLOR_BG);
-    draw_pipes();
-    draw_bird();
-    draw_hud();
+    tft_fill_screen(COLOR_BG); //clear screen (the flash you see when i reset the game)
 }
 
-void bird_jump()
-{
-    if(!game_over)
-        bird.velocity = JUMP_FORCE;
-}
-
-void update_bird()
+//xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxBIRD (stick + grav)xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+void update_bird_from_adc(uint16_t adc_val)
 {
     bird.old_x = bird.x;
     bird.old_y = bird.y;
 
+    int center = 3000;
+    int deadzone = 150; //accounting for deadzone
+
+    int diff = adc_val - center;
+
+    if(diff > deadzone || diff < -deadzone)
+        bird.velocity += diff / 600;
+
     if(gravity_delay > 0)
         gravity_delay--;
-    else {
+    else
         bird.velocity += GRAVITY;
-        bird.y += bird.velocity;
+
+    if(bird.velocity > 6) bird.velocity = 6; //cap vel
+    if(bird.velocity < -6) bird.velocity = -6;
+
+    bird.y += bird.velocity;
+
+    if(bird.y < HUD_HEIGHT) //hud is limit so stop there
+    {
+        bird.y = HUD_HEIGHT;
+        bird.velocity = 0;
+        //do you guys want to die when you hit the ceiling?
     }
 
-    if(bird.y < HUD_HEIGHT)
-        bird.y = HUD_HEIGHT;
-
-    if(bird.y > SCREEN_HEIGHT - BIRD_SIZE)
+    if(bird.y > SCREEN_HEIGHT - BIRD_SIZE) //bird falling to ground = dead
     {
         bird.y = SCREEN_HEIGHT - BIRD_SIZE;
         game_over = true;
     }
 }
 
+// xxxxxxxxxxxxxxxxxxxx PIPES xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 void update_pipes()
 {
     for(int i=0;i<PIPE_COUNT;i++)
@@ -135,12 +143,13 @@ void update_pipes()
         if(pipes[i].x < -PIPE_WIDTH)
         {
             pipes[i].x = SCREEN_WIDTH;
-            pipes[i].gap_y = rand() % (SCREEN_HEIGHT - PIPE_GAP - HUD_HEIGHT - 20) + HUD_HEIGHT + 10;
+            pipes[i].gap_y = rand() % (SCREEN_HEIGHT - PIPE_GAP - HUD_HEIGHT - 20) + HUD_HEIGHT + 10; //please dont touch i dont know how to fix 
             pipes[i].scored = false;
         }
     }
 }
 
+// xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx COLLISION xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 bool check_collision()
 {
     for(int i=0;i<PIPE_COUNT;i++)
@@ -148,33 +157,46 @@ bool check_collision()
         if(bird.x+BIRD_SIZE > pipes[i].x &&
            bird.x < pipes[i].x+PIPE_WIDTH)
         {
-            if(bird.y < pipes[i].gap_y ||
-               bird.y+BIRD_SIZE > pipes[i].gap_y+PIPE_GAP)
+            if(bird.y < pipes[i].gap_y || bird.y+BIRD_SIZE > pipes[i].gap_y+PIPE_GAP)
                 return true;
         }
     }
     return false;
 }
 
-void game_update()
+// game logic update function
+void game_update(uint16_t adc_val)
 {
     if(game_over) return;
 
-    update_bird();
+    update_bird_from_adc(adc_val);
     update_pipes();
 
+    //add to score when passing pipes
     for(int i=0;i<PIPE_COUNT;i++)
     {
         if(!pipes[i].scored && pipes[i].x+PIPE_WIDTH < bird.x)
         {
             pipes[i].scored = true;
             score++;
-            if(score > high_score) high_score = score;
+            if(score > high_score)
+            {
+                high_score = score;
+                save_high_score(high_score);
+            }
         }
     }
 
-    if(check_collision())
+    if(check_collision()) //die logic
+    {
         game_over = true;
+    
+        if(score > high_score)
+        {
+            high_score = score;
+            save_high_score(high_score);
+        }
+    }
 }
 
 void draw_bird()
@@ -194,13 +216,12 @@ void draw_pipes()
         int x = pipes[i].x;
         int g = pipes[i].gap_y;
 
-        if(g > HUD_HEIGHT)
+        if(g > HUD_HEIGHT) //top
             draw_rect(x,HUD_HEIGHT,PIPE_WIDTH,g-HUD_HEIGHT,COLOR_PIPE);
 
-        draw_rect(x,g,PIPE_WIDTH,PIPE_GAP,COLOR_BG);
+        draw_rect(x,g,PIPE_WIDTH,PIPE_GAP,COLOR_BG); //gap
 
-        draw_rect(x,g+PIPE_GAP,PIPE_WIDTH,
-                  SCREEN_HEIGHT-(g+PIPE_GAP),COLOR_PIPE);
+        draw_rect(x,g+PIPE_GAP,PIPE_WIDTH, SCREEN_HEIGHT-(g+PIPE_GAP),COLOR_PIPE); //bottom part of pipe
     }
 }
 
@@ -219,7 +240,8 @@ void erase_pipes()
     }
 }
 
-static void draw_digit(int x,int y,int d,int s,uint16_t c)
+// TEXT DISPLAYING
+static void draw_digit(int x,int y,int d,int s,uint16_t c) //for score
 {
     static const uint8_t f[10][5]={
         {7,5,5,5,7},{2,6,2,2,7},{7,1,7,4,7},{7,1,7,1,7},
@@ -246,8 +268,10 @@ static void draw_number(int x,int y,int v,int s,uint16_t c)
     }
 }
 
-static void draw_char(int x, int y, char c, int scale, uint16_t color)
+static void draw_char(int x,int y,char c,int scale,uint16_t color)
 {
+    // same as old file
+    //for displaying game over, score, high
     int s = scale;
 
     switch(c)
@@ -337,16 +361,12 @@ static void draw_char(int x, int y, char c, int scale, uint16_t color)
     }
 }
 
-static void draw_text(int x, int y, const char *text, int scale, uint16_t color)
+static void draw_text(int x,int y,const char *t,int s,uint16_t c)
 {
-    while(*text)
-    {
-        draw_char(x, y, *text, scale, color);
-        x += scale * 7;
-        text++;
-    }
+    while(*t){draw_char(x,y,*t,s,c);x+=s*7;t++;}
 }
 
+// hud
 static void draw_hud(void)
 {
     if(score==last_drawn_score && high_score==last_drawn_high_score)
@@ -366,6 +386,7 @@ static void draw_hud(void)
     last_drawn_high_score=high_score;
 }
 
+// xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx GAME OVER xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 static void draw_game_over_screen(void)
 {
     tft_fill_screen(COLOR_RED);
@@ -379,6 +400,7 @@ static void draw_game_over_screen(void)
     draw_number(160,160,high_score,3,COLOR_BLACK);
 }
 
+// xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx game draw  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 void game_draw()
 {
     if(game_over)
